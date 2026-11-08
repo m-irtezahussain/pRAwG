@@ -1,0 +1,90 @@
+name: prawg
+
+x-api-environment: &api-environment
+  CHROMA_HOST: chroma
+  CHROMA_PORT: 8000
+  CHROMA_COLLECTION: ${CHROMA_COLLECTION:-personal_documents}
+  CHAT_PROVIDER: ${CHAT_PROVIDER:-ollama}
+  GOOGLE_API_KEY: ${GOOGLE_API_KEY:-}
+  GEMINI_MODEL: ${GEMINI_MODEL:-gemini-2.5-flash}
+  OLLAMA_BASE_URL: http://ollama:11434
+  OLLAMA_MODEL: ${OLLAMA_MODEL:-gemma3:1b}
+  MAX_UPLOAD_MB: ${MAX_UPLOAD_MB:-25}
+  CHUNK_SIZE: ${CHUNK_SIZE:-1200}
+  CHUNK_OVERLAP: ${CHUNK_OVERLAP:-200}
+
+services:
+  api:
+    build:
+      context: .
+      target: dev
+    environment: *api-environment
+    ports:
+      - "127.0.0.1:8080:8080"
+    volumes:
+      - embedding-cache:/home/app/.cache/chroma
+    depends_on:
+      chroma-ready:
+        condition: service_completed_successfully
+        restart: true
+      ollama:
+        condition: service_healthy
+        restart: true
+    develop:
+      watch:
+        - action: sync
+          path: ./app
+          target: /app/app
+        - action: rebuild
+          path: ./requirements.txt
+        - action: rebuild
+          path: ./requirements-dev.txt
+        - action: rebuild
+          path: ./Dockerfile
+
+  chroma:
+    image: chromadb/chroma:1.5.9
+    environment:
+      ANONYMIZED_TELEMETRY: "FALSE"
+    ports:
+      - "127.0.0.1:8000:8000"
+    volumes:
+      - chroma-data:/data
+    restart: unless-stopped
+
+  chroma-ready:
+    image: curlimages/curl:8.16.0
+    depends_on:
+      chroma:
+        condition: service_started
+    command:
+      - --fail
+      - --silent
+      - --show-error
+      - --retry
+      - "30"
+      - --retry-connrefused
+      - --retry-delay
+      - "1"
+      - http://chroma:8000/api/v2/heartbeat
+    restart: "no"
+
+  ollama:
+    image: ollama/ollama:0.40.15
+    ports:
+      - "127.0.0.1:11434:11434"
+    volumes:
+      - ollama-data:/root/.ollama
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+      start_interval: 2s
+    restart: unless-stopped
+
+volumes:
+  chroma-data:
+  embedding-cache:
+  ollama-data:
