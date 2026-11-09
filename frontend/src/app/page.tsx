@@ -36,7 +36,7 @@ export default function Home() {
           </div>
 
           <a
-            href="#get-started"
+            href="/app"
             className="group flex items-center gap-2 rounded-full border border-ink/15 bg-white/60 px-4 py-2.5 text-sm font-semibold backdrop-blur transition hover:border-primary-600 hover:text-primary-700"
           >
             Open app
@@ -57,7 +57,7 @@ export default function Home() {
             </p>
             <div className="mt-9 flex flex-col gap-3 sm:flex-row">
               <a
-                href="#get-started"
+                href="/app"
                 className="group inline-flex items-center justify-center gap-2 rounded-full bg-primary-600 px-6 py-3.5 text-sm font-semibold text-white shadow-[0_12px_32px_rgba(92,68,199,0.25)] transition hover:-translate-y-0.5 hover:bg-primary-700"
               >
                 Build your knowledge base
@@ -250,7 +250,7 @@ export default function Home() {
           <p className="eyebrow">Ready when your documents are</p>
           <h2 className="mx-auto mt-5 max-w-4xl text-[clamp(2.8rem,7vw,5.8rem)] font-semibold leading-[0.96] tracking-[-0.07em]">Make your knowledge useful again.</h2>
           <p className="mx-auto mt-6 max-w-xl text-lg leading-8 text-ink/55">Start with one collection. Add the sources you trust. Ask the question you have been carrying around.</p>
-          <a href="#top" className="mt-9 inline-flex items-center gap-2 rounded-full bg-ink px-7 py-4 text-sm font-semibold text-white transition hover:-translate-y-0.5 hover:bg-primary-700">
+          <a href="/app" className="mt-9 inline-flex items-center gap-2 rounded-full bg-ink px-7 py-4 text-sm font-semibold text-white transition hover:-translate-y-0.5 hover:bg-primary-700">
             Start exploring
             <ArrowUpRight />
           </a>
