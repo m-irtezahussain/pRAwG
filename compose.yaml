@@ -14,6 +14,27 @@ x-api-environment: &api-environment
   CHUNK_OVERLAP: ${CHUNK_OVERLAP:-200}
 
 services:
+  frontend:
+    build:
+      context: ./frontend
+      target: dev
+    ports:
+      - "127.0.0.1:3000:3000"
+    develop:
+      watch:
+        - action: sync
+          path: ./frontend/src
+          target: /app/src
+        - action: sync+restart
+          path: ./frontend/next.config.ts
+          target: /app/next.config.ts
+        - action: rebuild
+          path: ./frontend/package.json
+        - action: rebuild
+          path: ./frontend/package-lock.json
+        - action: rebuild
+          path: ./frontend/Dockerfile
+
   api:
     build:
       context: .

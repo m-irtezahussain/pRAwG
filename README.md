@@ -30,7 +30,8 @@ starter stack contains:
    docker compose exec ollama ollama pull gemma3:1b
    ```
 
-4. Open the API docs at <http://127.0.0.1:8080/docs>.
+4. Open the frontend at <http://127.0.0.1:3000> and the API docs at
+   <http://127.0.0.1:8080/docs>.
 
 Chroma is available to the host at <http://127.0.0.1:8000> and Ollama at
 <http://127.0.0.1:11434>. All published ports bind only to loopback.
@@ -83,8 +84,9 @@ docker compose run --rm --no-deps api ruff check --no-cache app tests
 docker compose config --quiet
 ```
 
-Application source changes are synchronized into the API container by Compose
-Watch. Changes to dependency files or the Dockerfile trigger an image rebuild.
+Frontend and API source changes are synchronized into their containers by
+Compose Watch. Changes to dependency files or Dockerfiles trigger an image
+rebuild.
 
 Data is kept in the `chroma-data` named volume and the local embedding-model
 cache in `embedding-cache`. Ollama models are kept in `ollama-data`.
