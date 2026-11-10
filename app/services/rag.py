@@ -1,56 +1,55 @@
 from __future__ import annotations
 
-import hashlib
-from typing import Any
-
-import chromadb
 import httpx
 from google import genai
 
 from app.config import Settings
-from app.schemas import SearchResult
+from app.schemas import SearchResult, StoredDocument
+from app.services.object_storage import DocumentDownload, ObjectStorage
+from app.services.vector_stores import VectorStoreManager
 
 
 class RagService:
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
-        self.chroma = chromadb.HttpClient(host=settings.chroma_host, port=settings.chroma_port)
-        self.collection = self.chroma.get_or_create_collection(name=settings.chroma_collection)
+        self.object_storage = ObjectStorage(settings)
+        self.vector_stores = VectorStoreManager.from_settings(settings)
         self.genai = genai.Client(api_key=settings.google_api_key) if settings.google_api_key else None
 
-    def heartbeat(self) -> int:
-        return self.chroma.heartbeat()
+    def heartbeat(self) -> None:
+        self.object_storage.heartbeat()
+        self.vector_stores.heartbeat()
 
-    def ingest(self, filename: str, content: bytes, text_chunks: list[str]) -> str:
-        document_id = hashlib.sha256(content).hexdigest()
-        ids = [f"{document_id}:{index}" for index in range(len(text_chunks))]
-        metadatas = [
-            {"document_id": document_id, "filename": filename, "chunk_index": index}
-            for index in range(len(text_chunks))
-        ]
-        self.collection.upsert(ids=ids, documents=text_chunks, metadatas=metadatas)
-        return document_id
+    def ingest(
+        self,
+        filename: str,
+        content: bytes,
+        content_type: str,
+        text_chunks: list[str],
+        metadata: dict[str, str],
+    ) -> str:
+        collection = self.vector_stores.status.collection
+        stored_id = self.object_storage.store_document(
+            filename,
+            content,
+            content_type,
+            collection,
+            len(text_chunks),
+            metadata,
+        )
+        vector_id = self.vector_stores.ingest(filename, content, text_chunks, metadata)
+        if stored_id != vector_id:
+            raise RuntimeError("Document identifiers did not match")
+        return stored_id
+
+    def list_documents(self) -> list[StoredDocument]:
+        return self.object_storage.list_documents()
+
+    def get_document(self, document_id: str) -> DocumentDownload:
+        return self.object_storage.get_document(document_id)
 
     def search(self, query: str, top_k: int) -> list[SearchResult]:
-        result: dict[str, Any] = self.collection.query(
-            query_texts=[query],
-            n_results=top_k,
-            include=["documents", "metadatas", "distances"],
-        )
-        ids = (result.get("ids") or [[]])[0]
-        documents = (result.get("documents") or [[]])[0]
-        metadatas = (result.get("metadatas") or [[]])[0]
-        distances = (result.get("distances") or [[]])[0]
-
-        return [
-            SearchResult(
-                id=item_id,
-                text=documents[index] or "",
-                metadata=metadatas[index] or {},
-                distance=distances[index] if index < len(distances) else None,
-            )
-            for index, item_id in enumerate(ids)
-        ]
+        return self.vector_stores.search(query, top_k)
 
     def chat(self, question: str, sources: list[SearchResult]) -> str:
         context = "\n\n".join(
