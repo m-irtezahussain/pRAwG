@@ -1,21 +1,24 @@
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
-from typing import Annotated
 
-from fastapi import FastAPI, File, HTTPException, Request, UploadFile, status
+from fastapi import FastAPI, HTTPException, Request, status
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 from app.config import get_settings
+from app.routers.documents import router as documents_router
+from app.routers.vector_stores import router as vector_stores_router
 from app.schemas import (
     ChatRequest,
     ChatResponse,
     HealthResponse,
-    IngestResponse,
     SearchRequest,
     SearchResponse,
 )
-from app.services.documents import DocumentExtractionError, chunk_text, extract_document
+from app.services.object_storage import ObjectStorageError
 from app.services.rag import RagService
+from app.services.vector_stores import VectorStoreConnectionError
 
 
 @asynccontextmanager
@@ -27,6 +30,29 @@ async def lifespan(app: FastAPI):
 def create_app() -> FastAPI:
     settings = get_settings()
     api = FastAPI(title=settings.app_name, version="0.1.0", lifespan=lifespan)
+    api.add_middleware(
+        CORSMiddleware,
+        allow_origins=settings.cors_origins,
+        allow_credentials=False,
+        allow_methods=["GET", "POST", "DELETE"],
+        allow_headers=["Content-Type"],
+    )
+    api.include_router(vector_stores_router)
+    api.include_router(documents_router)
+
+    @api.exception_handler(VectorStoreConnectionError)
+    async def vector_store_error(_: Request, exc: VectorStoreConnectionError) -> JSONResponse:
+        return JSONResponse(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            content={"detail": str(exc)},
+        )
+
+    @api.exception_handler(ObjectStorageError)
+    async def object_storage_error(_: Request, exc: ObjectStorageError) -> JSONResponse:
+        return JSONResponse(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            content={"detail": str(exc)},
+        )
 
     @api.get("/health/live", response_model=HealthResponse, tags=["health"])
     def live() -> HealthResponse:
@@ -37,32 +63,8 @@ def create_app() -> FastAPI:
         try:
             _rag(request).heartbeat()
         except Exception as exc:
-            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Chroma is unavailable") from exc
+            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Vector store is unavailable") from exc
         return HealthResponse(status="ready")
-
-    @api.post(
-        "/api/v1/documents",
-        response_model=IngestResponse,
-        status_code=status.HTTP_201_CREATED,
-        tags=["rag"],
-    )
-    def ingest_document(request: Request, file: Annotated[UploadFile, File()]) -> IngestResponse:
-        filename = file.filename or "upload"
-        content = _read_limited(file, settings.max_upload_mb * 1024 * 1024)
-        try:
-            document = extract_document(filename, content)
-        except DocumentExtractionError as exc:
-            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)) from exc
-
-        chunks = chunk_text(document.text, settings.chunk_size, settings.chunk_overlap)
-        document_id = _rag(request).ingest(filename, content, chunks)
-        return IngestResponse(
-            document_id=document_id,
-            filename=filename,
-            chunks=len(chunks),
-            characters=len(document.text),
-            ocr_used=document.ocr_used,
-        )
 
     @api.post("/api/v1/search", response_model=SearchResponse, tags=["rag"])
     def search(request: Request, body: SearchRequest) -> SearchResponse:
@@ -83,15 +85,6 @@ def create_app() -> FastAPI:
 
 def _rag(request: Request) -> RagService:
     return request.app.state.rag
-
-
-def _read_limited(file: UploadFile, limit: int) -> bytes:
-    content = file.file.read(limit + 1)
-    if not content:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="The uploaded file is empty")
-    if len(content) > limit:
-        raise HTTPException(status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, detail="The uploaded file is too large")
-    return content
 
 
 app = create_app()

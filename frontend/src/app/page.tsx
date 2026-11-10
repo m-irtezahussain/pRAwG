@@ -71,7 +71,7 @@ export default function Home() {
               </a>
             </div>
             <div className="mt-10 flex items-center gap-4 text-xs font-medium text-ink/50">
-              <span className="flex items-center gap-1.5"><span className="size-1.5 rounded-full bg-secondary-600" />PDF, DOCX, TXT & MD</span>
+              <span className="flex items-center gap-1.5"><span className="size-1.5 rounded-full bg-secondary-600" />PDF, DOCX, XLSX, CSV, TXT & MD</span>
               <span className="h-3 w-px bg-ink/15" />
               <span>No generic answers</span>
             </div>
