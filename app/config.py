@@ -14,9 +14,9 @@ class Settings(BaseSettings):
     chroma_collection: str = "personal_documents"
     cors_origins: list[str] = ["http://localhost:3000", "http://127.0.0.1:3000"]
 
-    chat_provider: Literal["gemini", "ollama"] = "ollama"
+    chat_provider: Literal["gemini", "ollama"] = "gemini"
     google_api_key: str | None = None
-    gemini_model: str = "gemini-2.5-flash"
+    gemini_model: str = "gemini-3.8-flash"
     ollama_base_url: str = "http://localhost:11434"
     ollama_model: str = "gemma3:1b"
     ollama_embedding_model: str = "nomic-embed-text-v2-moe:latest"

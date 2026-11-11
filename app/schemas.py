@@ -83,14 +83,28 @@ class SearchResponse(StrictModel):
     results: list[SearchResult]
 
 
+class ChatHistoryMessage(StrictModel):
+    role: Literal["user", "assistant"]
+    content: str = Field(min_length=1, max_length=10_000)
+
+
 class ChatRequest(StrictModel):
     question: str = Field(min_length=1, max_length=10_000)
     top_k: int = Field(default=5, ge=1, le=25)
+    history: list[ChatHistoryMessage] = Field(default_factory=list, max_length=20)
 
 
 class ChatResponse(StrictModel):
     answer: str
     sources: list[SearchResult]
+
+
+class GroundedModelResponse(BaseModel):
+    answer: str = Field(min_length=1)
+    cited_source_numbers: list[Annotated[int, Field(ge=1)]] = Field(
+        default_factory=list,
+        max_length=25,
+    )
 
 
 CollectionName = Annotated[str, Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]*$")]

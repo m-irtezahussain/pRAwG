@@ -2,6 +2,7 @@
 
 import { ChangeEvent, FormEvent, KeyboardEvent, ReactNode, useEffect, useRef, useState } from "react";
 import Link from "next/link";
+import { askKnowledgeBase, type ChatHistoryMessage, type ChatSource } from "@/services/chat";
 import { getStoredDocuments, storedDocumentDownloadUrl, uploadDocument, type IngestedDocument, type StoredDocument } from "@/services/documents";
 import {
   connectVectorStore,
@@ -19,6 +20,14 @@ import {
 } from "@/services/vector-store";
 
 type View = "chat" | "knowledge" | "cloud";
+
+type StorageSummary = {
+  bytes: number;
+  collections: number;
+  documents: number;
+  error: string;
+  loading: boolean;
+};
 
 type IconProps = { className?: string };
 
@@ -69,7 +78,7 @@ const navigation: { id: View; label: string; shortLabel: string; icon: (props: I
 ];
 
 const viewDetails: Record<View, { eyebrow: string; title: string; description: string }> = {
-  chat: { eyebrow: "Research notes", title: "Ask your knowledge", description: "Answers grounded in 12 indexed documents" },
+  chat: { eyebrow: "Research notes", title: "Ask your knowledge", description: "Answers grounded in your indexed documents" },
   knowledge: { eyebrow: "Data connection", title: "Manage knowledge base", description: "Connect and configure your vector database" },
   cloud: { eyebrow: "Document library", title: "Your cloud", description: "All documents available to your knowledge base" },
 };
@@ -201,7 +210,7 @@ function ProviderSelect({ value, onChange }: { value: VectorStoreProvider; onCha
   );
 }
 
-function Sidebar({ activeView, onChange, mobileOpen, onClose }: { activeView: View; onChange: (view: View) => void; mobileOpen: boolean; onClose: () => void }) {
+function Sidebar({ activeView, onChange, mobileOpen, onClose, storage }: { activeView: View; onChange: (view: View) => void; mobileOpen: boolean; onClose: () => void; storage: StorageSummary }) {
   return (
     <>
       {mobileOpen && <button aria-label="Close navigation" className="fixed inset-0 z-30 bg-ink/35 backdrop-blur-sm lg:hidden" onClick={onClose} />}
@@ -237,10 +246,13 @@ function Sidebar({ activeView, onChange, mobileOpen, onClose }: { activeView: Vi
         <div className="mt-auto rounded-2xl border border-white/10 bg-white/[0.055] p-4">
           <div className="flex items-center justify-between text-xs">
             <span className="font-semibold">Storage</span>
-            <span className="text-white/40">1.8 / 5 GB</span>
+            <span className="text-white/40">{storage.loading ? "Loading…" : formatBytes(storage.bytes)}</span>
           </div>
-          <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-white/10"><div className="h-full w-[36%] rounded-full bg-secondary-300" /></div>
-          <p className="mt-3 text-[11px] leading-5 text-white/35">12 documents across 3 collections</p>
+          <div className="mt-3 grid grid-cols-2 gap-2">
+            <div className="rounded-xl bg-white/[0.055] px-3 py-2"><p className="text-sm font-semibold">{storage.loading ? "—" : storage.documents.toLocaleString()}</p><p className="mt-0.5 text-[9px] uppercase tracking-wide text-white/30">Documents</p></div>
+            <div className="rounded-xl bg-white/[0.055] px-3 py-2"><p className="text-sm font-semibold">{storage.loading ? "—" : storage.collections.toLocaleString()}</p><p className="mt-0.5 text-[9px] uppercase tracking-wide text-white/30">Collections</p></div>
+          </div>
+          <p className={`mt-3 text-[10px] leading-4 ${storage.error ? "text-[#ffaaa2]" : "text-white/30"}`}>{storage.error || "Live totals from stored documents"}</p>
         </div>
 
         <div className="mt-4 flex items-center gap-3 border-t border-white/8 px-2 pt-4">
@@ -270,50 +282,86 @@ function Topbar({ activeView, onMenu }: { activeView: View; onMenu: () => void }
 
 function ChatView() {
   const [message, setMessage] = useState("");
-  const [sentMessages, setSentMessages] = useState<string[]>([]);
+  const [messages, setMessages] = useState<(ChatHistoryMessage & { sources?: ChatSource[] })[]>([]);
+  const [sending, setSending] = useState(false);
+  const [error, setError] = useState("");
+  const conversationEnd = useRef<HTMLDivElement>(null);
 
-  function sendMessage(event: FormEvent<HTMLFormElement>) {
+  useEffect(() => {
+    conversationEnd.current?.scrollIntoView({ behavior: "smooth", block: "end" });
+  }, [messages, sending]);
+
+  async function sendMessage(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const value = message.trim();
-    if (!value) return;
-    setSentMessages((current) => [...current, value]);
+    if (!value || sending) return;
+    const history = messages.slice(-20).map(({ role, content }) => ({ role, content }));
+    setMessages((current) => [...current, { role: "user", content: value }]);
     setMessage("");
+    setError("");
+    setSending(true);
+    try {
+      const response = await askKnowledgeBase(value, history);
+      setMessages((current) => [
+        ...current,
+        { role: "assistant", content: response.answer, sources: response.sources },
+      ]);
+    } catch (requestError) {
+      setMessages((current) => current.slice(0, -1));
+      setMessage(value);
+      setError(requestError instanceof Error ? requestError.message : "We couldn't get an answer. Please try again.");
+    } finally {
+      setSending(false);
+    }
   }
 
   return (
     <div className="mx-auto flex h-full w-full max-w-4xl flex-col px-4 py-6 sm:px-8 sm:py-8">
       <div className="flex-1 space-y-6 overflow-y-auto pb-6">
-        <div className="mx-auto max-w-xl py-5 text-center sm:py-8">
+        {messages.length === 0 && <div className="mx-auto max-w-xl py-5 text-center sm:py-8">
           <div className="mx-auto grid size-12 place-items-center rounded-2xl bg-primary-50 text-primary-600"><SparkIcon className="size-5" /></div>
           <h2 className="mt-4 text-2xl font-semibold tracking-[-0.04em]">What would you like to know?</h2>
           <p className="mt-2 text-sm leading-6 text-ink/45">I’ll search your connected knowledge base and cite the most useful sources.</p>
           <div className="mt-5 flex flex-wrap justify-center gap-2">
             {["Summarize the latest research", "Compare project requirements", "Find key decisions"].map((prompt) => <button key={prompt} onClick={() => setMessage(prompt)} className="rounded-full border border-ink/10 bg-white px-3.5 py-2 text-xs font-medium text-ink/55 shadow-sm transition hover:border-primary-600/25 hover:text-primary-700">{prompt}</button>)}
           </div>
-        </div>
+        </div>}
 
-        <div className="ml-auto max-w-[86%] rounded-2xl rounded-br-md bg-primary-600 px-4 py-3 text-sm leading-6 text-white shadow-[0_12px_30px_rgba(92,68,199,0.18)] sm:max-w-[70%]">What are the central findings across my research documents?</div>
-        <div className="max-w-[94%] rounded-2xl rounded-bl-md border border-ink/8 bg-white p-5 text-sm leading-6 text-ink/65 shadow-sm sm:max-w-[82%]">
-          <div className="mb-3 flex items-center gap-2 font-semibold text-ink"><span className="grid size-7 place-items-center rounded-lg bg-primary-50 text-primary-600"><SparkIcon className="size-3" /></span>Answer from your documents</div>
-          Across the indexed research, three themes stand out: retrieval quality improves most when chunks preserve semantic context, hybrid search consistently outperforms keyword-only methods, and source citations materially improve user trust in generated answers.
-          <div className="mt-4 flex flex-wrap gap-2"><span className="rounded-lg bg-primary-50 px-2.5 py-1 text-[10px] font-semibold text-primary-700">rag-evaluation.pdf · p. 8</span><span className="rounded-lg bg-primary-50 px-2.5 py-1 text-[10px] font-semibold text-primary-700">research-notes.md</span></div>
-        </div>
-        {sentMessages.map((item, index) => <div key={`${item}-${index}`} className="ml-auto max-w-[86%] rounded-2xl rounded-br-md bg-primary-600 px-4 py-3 text-sm leading-6 text-white shadow-[0_12px_30px_rgba(92,68,199,0.18)] sm:max-w-[70%]">{item}</div>)}
+        {messages.map((item, index) => item.role === "user" ? (
+          <div key={index} className="ml-auto max-w-[86%] whitespace-pre-wrap rounded-2xl rounded-br-md bg-primary-600 px-4 py-3 text-sm leading-6 text-white shadow-[0_12px_30px_rgba(92,68,199,0.18)] sm:max-w-[70%]">{item.content}</div>
+        ) : (
+          <div key={index} className="max-w-[94%] whitespace-pre-wrap rounded-2xl rounded-bl-md border border-ink/8 bg-white p-5 text-sm leading-6 text-ink/65 shadow-sm sm:max-w-[82%]">
+            <div className="mb-3 flex items-center gap-2 font-semibold text-ink"><span className="grid size-7 place-items-center rounded-lg bg-primary-50 text-primary-600"><SparkIcon className="size-3" /></span>Answer from your documents</div>
+            {item.content}
+            {item.sources && item.sources.length > 0 && <div className="mt-4 flex flex-wrap gap-2">
+              {item.sources.map((source, sourceIndex) => <span key={`${source.id}-${sourceIndex}`} title={source.text} className="rounded-lg bg-primary-50 px-2.5 py-1 text-[10px] font-semibold text-primary-700">{sourceLabel(source, sourceIndex)}</span>)}
+            </div>}
+          </div>
+        ))}
+        {sending && <div role="status" className="max-w-[94%] rounded-2xl rounded-bl-md border border-ink/8 bg-white p-5 text-sm text-ink/45 shadow-sm sm:max-w-[82%]">Searching your documents and asking Gemini…</div>}
+        {error && <div role="alert" className="max-w-[94%] rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-xs text-red-700">{error}</div>}
+        <div ref={conversationEnd} />
       </div>
 
       <form onSubmit={sendMessage} className="rounded-[1.35rem] border border-ink/10 bg-white p-2 shadow-[0_18px_50px_rgba(32,26,46,0.10)]">
         <label htmlFor="message" className="sr-only">Ask your knowledge base</label>
         <div className="flex items-end gap-2">
           <textarea id="message" value={message} onChange={(event) => setMessage(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); event.currentTarget.form?.requestSubmit(); } }} rows={1} placeholder="Ask anything about your knowledge base…" className="min-h-12 flex-1 resize-none bg-transparent px-3 py-3 text-sm outline-none placeholder:text-ink/30" />
-          <button type="submit" aria-label="Send message" className="grid size-11 shrink-0 place-items-center rounded-2xl bg-primary-600 text-white transition hover:bg-primary-700 disabled:opacity-40" disabled={!message.trim()}><SendIcon className="size-4" /></button>
+          <button type="submit" aria-label="Send message" className="grid size-11 shrink-0 place-items-center rounded-2xl bg-primary-600 text-white transition hover:bg-primary-700 disabled:opacity-40" disabled={!message.trim() || sending}><SendIcon className="size-4" /></button>
         </div>
-        <div className="flex items-center justify-between px-3 pb-1 pt-1 text-[10px] text-ink/30"><span>Research notes · 12 sources</span><span>Enter to send</span></div>
+        <div className="flex items-center justify-between px-3 pb-1 pt-1 text-[10px] text-ink/30"><span>Grounded in your connected knowledge base</span><span>Enter to send</span></div>
       </form>
     </div>
   );
 }
 
-function KnowledgeView() {
+function sourceLabel(source: ChatSource, index: number): string {
+  const filename = typeof source.metadata.filename === "string" ? source.metadata.filename : `Source ${index + 1}`;
+  const page = source.metadata.page ?? source.metadata.page_number;
+  return page === undefined ? filename : `${filename} · p. ${page}`;
+}
+
+function KnowledgeView({ onDocumentUploaded }: { onDocumentUploaded: () => void }) {
   const [provider, setProvider] = useState<VectorStoreProvider>("chroma_self_hosted");
   const [connection, setConnection] = useState<VectorStoreConnection | null>(null);
   const [connectionResolved, setConnectionResolved] = useState(false);
@@ -455,7 +503,7 @@ function KnowledgeView() {
     if (selectedCollection) {
       return <CollectionDetail collection={selectedCollection} onBack={() => setSelectedCollection(null)} />;
     }
-    return <ConnectionDashboard connection={connection} onChangeConnection={() => setShowConnectionForm(true)} onViewCollection={setSelectedCollection} />;
+    return <ConnectionDashboard connection={connection} onChangeConnection={() => setShowConnectionForm(true)} onViewCollection={setSelectedCollection} onDocumentUploaded={onDocumentUploaded} />;
   }
 
   return (
@@ -599,7 +647,7 @@ function DocumentMetadataDialog({ file, uploading, error, onCancel, onUpload }: 
   );
 }
 
-function ConnectionDashboard({ connection, onChangeConnection, onViewCollection }: { connection: VectorStoreConnection; onChangeConnection: () => void; onViewCollection: (collection: string) => void }) {
+function ConnectionDashboard({ connection, onChangeConnection, onViewCollection, onDocumentUploaded }: { connection: VectorStoreConnection; onChangeConnection: () => void; onViewCollection: (collection: string) => void; onDocumentUploaded: () => void }) {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const addDataButtonRef = useRef<HTMLButtonElement>(null);
   const [uploading, setUploading] = useState(false);
@@ -658,6 +706,7 @@ function ConnectionDashboard({ connection, onChangeConnection, onViewCollection 
     try {
       setLastUpload(await uploadDocument(pendingFile, { filename, metadata }));
       setCollectionsVersion((version) => version + 1);
+      onDocumentUploaded();
       setPendingFile(null);
       requestAnimationFrame(() => addDataButtonRef.current?.focus());
     } catch (error) {
@@ -913,30 +962,12 @@ function SecretField({ name, label, optional = false, className }: { name: strin
   return <label className="block"><span className="mb-2 block text-xs font-semibold text-ink/65">{label} {optional && <span className="font-normal text-ink/30">(optional)</span>}</span><input name={name} required={!optional} type="password" autoComplete="off" placeholder="••••••••••••" className={className} /></label>;
 }
 
-function CloudView() {
+function CloudView({ documents, loading, error }: { documents: StoredDocument[]; loading: boolean; error: string }) {
   const [search, setSearch] = useState("");
-  const [documents, setDocuments] = useState<StoredDocument[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState("");
   const normalizedSearch = search.trim().toLowerCase();
   const filtered = documents.filter((document) => `${document.filename} ${document.collection} ${Object.entries(document.metadata).flat().join(" ")}`.toLowerCase().includes(normalizedSearch));
   const totalChunks = documents.reduce((total, document) => total + document.chunks, 0);
   const totalBytes = documents.reduce((total, document) => total + document.size, 0);
-
-  useEffect(() => {
-    let cancelled = false;
-    getStoredDocuments()
-      .then((storedDocuments) => {
-        if (!cancelled) setDocuments(storedDocuments);
-      })
-      .catch((loadError) => {
-        if (!cancelled) setError(loadError instanceof Error ? loadError.message : "Unable to load stored documents.");
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
-      });
-    return () => { cancelled = true; };
-  }, []);
 
   return (
     <div className="mx-auto w-full max-w-6xl px-4 py-7 sm:px-8 sm:py-10">
@@ -977,15 +1008,46 @@ function documentExtension(filename: string): string {
 export function Workspace() {
   const [activeView, setActiveView] = useState<View>("chat");
   const [mobileOpen, setMobileOpen] = useState(false);
+  const [documents, setDocuments] = useState<StoredDocument[]>([]);
+  const [documentsLoading, setDocumentsLoading] = useState(true);
+  const [documentsError, setDocumentsError] = useState("");
+  const [documentsVersion, setDocumentsVersion] = useState(0);
+
+  useEffect(() => {
+    let cancelled = false;
+    getStoredDocuments()
+      .then((storedDocuments) => {
+        if (!cancelled) {
+          setDocuments(storedDocuments);
+          setDocumentsError("");
+        }
+      })
+      .catch((loadError) => {
+        if (!cancelled) setDocumentsError(loadError instanceof Error ? loadError.message : "Unable to load storage totals.");
+      })
+      .finally(() => {
+        if (!cancelled) setDocumentsLoading(false);
+      });
+    return () => { cancelled = true; };
+  }, [documentsVersion]);
+
+  const storage: StorageSummary = {
+    bytes: documents.reduce((total, document) => total + document.size, 0),
+    collections: new Set(documents.map((document) => document.collection)).size,
+    documents: documents.length,
+    error: documentsError,
+    loading: documentsLoading,
+  };
+
   return (
     <main className="flex h-dvh overflow-hidden bg-canvas text-ink">
-      <Sidebar activeView={activeView} onChange={setActiveView} mobileOpen={mobileOpen} onClose={() => setMobileOpen(false)} />
+      <Sidebar activeView={activeView} onChange={setActiveView} mobileOpen={mobileOpen} onClose={() => setMobileOpen(false)} storage={storage} />
       <div className="flex min-w-0 flex-1 flex-col">
         <Topbar activeView={activeView} onMenu={() => setMobileOpen(true)} />
         <div className="min-h-0 flex-1 overflow-y-auto">
           {activeView === "chat" && <ChatView />}
-          {activeView === "knowledge" && <KnowledgeView />}
-          {activeView === "cloud" && <CloudView />}
+          {activeView === "knowledge" && <KnowledgeView onDocumentUploaded={() => setDocumentsVersion((version) => version + 1)} />}
+          {activeView === "cloud" && <CloudView documents={documents} loading={documentsLoading} error={documentsError} />}
         </div>
         <nav className="grid grid-cols-3 border-t border-ink/8 bg-white px-2 py-2 lg:hidden" aria-label="Mobile workspace navigation">
           {navigation.map((item) => { const NavIcon = item.icon; const active = item.id === activeView; return <button key={item.id} onClick={() => setActiveView(item.id)} className={`flex flex-col items-center gap-1 rounded-xl py-2 text-[10px] font-semibold ${active ? "bg-primary-50 text-primary-700" : "text-ink/35"}`}><NavIcon className="size-4" />{item.shortLabel}</button>; })}

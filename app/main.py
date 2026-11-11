@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import logging
 from contextlib import asynccontextmanager
+from time import perf_counter
+from uuid import uuid4
 
-from fastapi import FastAPI, HTTPException, Request, status
+from fastapi import FastAPI, HTTPException, Request, Response, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
@@ -20,6 +23,8 @@ from app.services.object_storage import ObjectStorageError
 from app.services.rag import RagService
 from app.services.vector_stores import VectorStoreConnectionError
 
+logger = logging.getLogger("uvicorn.error.prawg.chat")
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -36,6 +41,7 @@ def create_app() -> FastAPI:
         allow_credentials=False,
         allow_methods=["GET", "POST", "DELETE"],
         allow_headers=["Content-Type"],
+        expose_headers=["X-Request-ID"],
     )
     api.include_router(vector_stores_router)
     api.include_router(documents_router)
@@ -71,14 +77,55 @@ def create_app() -> FastAPI:
         return SearchResponse(results=_rag(request).search(body.query, body.top_k))
 
     @api.post("/api/v1/chat", response_model=ChatResponse, tags=["rag"])
-    def chat(request: Request, body: ChatRequest) -> ChatResponse:
+    def chat(request: Request, response: Response, body: ChatRequest) -> ChatResponse:
+        request_id = uuid4().hex[:12]
+        response.headers["X-Request-ID"] = request_id
+        started_at = perf_counter()
+        logger.info(
+            "chat.request_started request_id=%s top_k=%d history_messages=%d question_chars=%d",
+            request_id,
+            body.top_k,
+            len(body.history),
+            len(body.question),
+        )
         service = _rag(request)
-        sources = service.search(body.question, body.top_k)
         try:
-            answer = service.chat(body.question, sources)
+            sources = service.search(body.question, body.top_k)
+        except Exception as exc:
+            logger.error(
+                "chat.retrieval_failed request_id=%s exception_type=%s elapsed_ms=%.1f",
+                request_id,
+                type(exc).__name__,
+                (perf_counter() - started_at) * 1000,
+            )
+            raise
+        logger.info(
+            "chat.retrieval_completed request_id=%s sources=%d elapsed_ms=%.1f",
+            request_id,
+            len(sources),
+            (perf_counter() - started_at) * 1000,
+        )
+        try:
+            chat_response = service.chat(body.question, sources, body.history, request_id=request_id)
         except RuntimeError as exc:
-            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc
-        return ChatResponse(answer=answer, sources=sources)
+            logger.warning(
+                "chat.request_failed request_id=%s reason=%s elapsed_ms=%.1f",
+                request_id,
+                str(exc),
+                (perf_counter() - started_at) * 1000,
+            )
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail=f"{exc} (request ID: {request_id})",
+            ) from exc
+        logger.info(
+            "chat.request_completed request_id=%s answer_chars=%d sources=%d elapsed_ms=%.1f",
+            request_id,
+            len(chat_response.answer),
+            len(chat_response.sources),
+            (perf_counter() - started_at) * 1000,
+        )
+        return chat_response
 
     return api
 
